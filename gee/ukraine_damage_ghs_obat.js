@@ -311,10 +311,18 @@ function predictWindow(region, win, clf) {
     ee.Image.constant(0).toFloat().updateMask(0))).rename('prob');
 }
 
+// A classifier loaded from an asset only supports CLASSIFICATION output, so the RF is re-trained
+// from the saved training table in each step. Same data + fixed seed -> same model.
+function trainClassifier() {
+  var id = CFG.ROOT + '/train_features';
+  requireAsset(id, 'training features (run STEP FEATURES)');
+  return ee.Classifier.smileRandomForest({
+    numberOfTrees: CFG.RF.numberOfTrees, minLeafPopulation: CFG.RF.minLeafPopulation,
+    maxNodes: CFG.RF.maxNodes, seed: CFG.RF.seed
+  }).train({features: ee.FeatureCollection(id), classProperty: 'label', inputProperties: FEATURE_NAMES});
+}
 function loadClassifier() {
-  var id = CFG.ROOT + '/rf_classifier';
-  requireAsset(id, 'classifier (run STEP TRAIN)');
-  return ee.Classifier.load(id).setOutputMode('PROBABILITY');
+  return trainClassifier().setOutputMode('PROBABILITY');
 }
 
 // ============================== LABELS ======================================
@@ -480,7 +488,7 @@ function stepCheck() {
     log('S1 IW images over Ukraine per window and platform (USE_S1C=' + CFG.USE_S1C + '):\n' +
       WNAMES.map(function(n) { return n + ' ' + JSON.stringify(c[n]); }).join('\n'));
   });
-  log('Classifier exists: ' + assetExists(CFG.ROOT + '/rf_classifier'));
+  log('Training features exist: ' + assetExists(CFG.ROOT + '/train_features'));
 }
 
 function stepFeatures() {
@@ -509,12 +517,8 @@ function stepTrain() {
   var fc = ee.FeatureCollection(id);
   log('Training rows:', fc.size());
   log('Training label balance:', fc.aggregate_histogram('label'));
-  var clf = ee.Classifier.smileRandomForest({
-    numberOfTrees: CFG.RF.numberOfTrees, minLeafPopulation: CFG.RF.minLeafPopulation,
-    maxNodes: CFG.RF.maxNodes, seed: CFG.RF.seed
-  }).train({features: fc, classProperty: 'label', inputProperties: FEATURE_NAMES});
-  // Exported in default CLASSIFICATION mode (GEE cannot export RF in PROBABILITY mode);
-  // loadClassifier() switches the loaded model to PROBABILITY output.
+  var clf = trainClassifier();
+  // Optional archive copy (CLASSIFICATION mode only); later steps re-train via loadClassifier().
   log('Classifier explain (importance):', clf.explain());
   var assetId = CFG.ROOT + '/rf_classifier';
   if (shouldSubmit('rf_classifier', assetExists(assetId))) {
