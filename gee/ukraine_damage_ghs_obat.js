@@ -87,6 +87,9 @@ var CFG = {
   MIN_AREA_M2: 50,
   PILOT_AOI: 'UKR6',                    // Chernihiv (test AOI)
   PILOT_ON_THE_FLY: true,               // pilot: compute probs inside the building export (no rasters)
+  // GHS-OBAT UKR is published as centroid points. Point footprints are replaced by an equal-area
+  // circle (radius = sqrt(area / pi)) so the overlap-weighted mean covers the building's size.
+  POINT_FOOTPRINT_TO_AREA_CIRCLE: true,
 
   // --- Rasters --------------------------------------------------------------
   CRS: 'EPSG:3035',                     // 10 m grid shared by raster export and footprint aggregation
@@ -337,8 +340,14 @@ function firstDetection(probs, th) {
 
 // ========================== BUILDINGS ========================================
 function footprints(region) {
-  return ee.FeatureCollection(CFG.FOOTPRINTS).filterBounds(region)
+  var fc = ee.FeatureCollection(CFG.FOOTPRINTS).filterBounds(region)
     .filter(ee.Filter.gt('area', CFG.MIN_AREA_M2));
+  if (!CFG.POINT_FOOTPRINT_TO_AREA_CIRCLE) return fc;
+  return fc.map(function(f) {
+    var isPoint = ee.String(f.geometry().type()).equals('Point');
+    var r = ee.Number(f.get('area')).divide(Math.PI).sqrt();
+    return ee.Feature(ee.Algorithms.If(isPoint, f.setGeometry(f.geometry().buffer(r, 0.5)), f));
+  });
 }
 
 // Stack of per-window probabilities scaled 0-255, bands P_T01..P_Tn.
@@ -420,7 +429,12 @@ function stepCheck() {
     var fp = ee.FeatureCollection(CFG.FOOTPRINTS);
     log('GHS-OBAT asset found: ' + CFG.FOOTPRINTS);
     log('GHS-OBAT schema (first feature):', fp.first());
-    log('GHS-OBAT property names:', fp.first().propertyNames());
+    fp.first().evaluate(function(f, err) {
+      if (err) { log('ERROR ' + err); return; }
+      log('GHS-OBAT geometry type: ' + f.geometry.type + (f.geometry.type === 'Point' ?
+        ' (centroids; POINT_FOOTPRINT_TO_AREA_CIRCLE=' + CFG.POINT_FOOTPRINT_TO_AREA_CIRCLE + ')' : ''));
+      log('GHS-OBAT properties: ' + JSON.stringify(f.properties));
+    });
     log('GHS-OBAT feature count (server-side):', fp.size());
     log('GHS-OBAT > ' + CFG.MIN_AREA_M2 + ' m2 in pilot AOI:', footprints(bboxGeom(CFG.PILOT_AOI)).size());
   } else {
@@ -431,7 +445,13 @@ function stepCheck() {
   if (CFG.HROMADAS && assetExists(CFG.HROMADAS)) {
     var h = ee.FeatureCollection(CFG.HROMADAS);
     log('Hromadas count:', h.size());
-    log('Hromada properties:', h.first().propertyNames());
+    h.first().evaluate(function(f, err) {
+      if (err) { log('ERROR ' + err); return; }
+      log('Hromada properties: ' + JSON.stringify(f.properties));
+      [CFG.HROMADA_ID_FIELD, CFG.HROMADA_NAME_FIELD, CFG.OBLAST_ID_FIELD, CFG.OBLAST_NAME_FIELD].forEach(function(k) {
+        if (!(k in f.properties)) log('FIELD NOT FOUND in hromada asset: ' + k + ' -> fix the *_FIELD settings in CFG');
+      });
+    });
     log('Oblasts (' + CFG.OBLAST_NAME_FIELD + '):', h.aggregate_array(CFG.OBLAST_NAME_FIELD).distinct().sort());
   } else { log('Hromada asset not set or missing: ' + CFG.HROMADAS); }
 
@@ -441,7 +461,11 @@ function stepCheck() {
   var counts = ee.Dictionary.fromLists(WNAMES, WINDOWS.map(function(w) {
     return all.filterDate(w.start, w.endExcl).aggregate_histogram('platform_number');
   }));
-  log('S1 IW images over Ukraine per window and platform (USE_S1C=' + CFG.USE_S1C + '):', counts);
+  counts.evaluate(function(c, err) {
+    if (err) { log('ERROR ' + err); return; }
+    log('S1 IW images over Ukraine per window and platform (USE_S1C=' + CFG.USE_S1C + '):\n' +
+      WNAMES.map(function(n) { return n + ' ' + JSON.stringify(c[n]); }).join('\n'));
+  });
   log('Classifier exists: ' + assetExists(CFG.ROOT + '/rf_classifier'));
 }
 
