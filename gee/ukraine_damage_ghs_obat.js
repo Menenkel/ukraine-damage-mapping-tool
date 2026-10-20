@@ -178,6 +178,8 @@ function labelRule(windowEndIncl, unosatDate) {
 }
 
 // ============================== HELPERS =====================================
+// Table assets cannot hold null geometries; summary rows get a dummy point (not exported to CSV).
+var NO_GEOM = ee.Geometry.Point([0, 0]);
 function tag(th) { return 't' + String(th).replace('.', ''); }       // 0.655 -> t0655
 function scopeDir() { return CFG.ROOT + '/' + CFG.SCOPE.toLowerCase(); }
 function bboxGeom(aoi) { var b = AOI_BBOX[aoi]; return ee.Geometry.Rectangle(b, null, false); }
@@ -492,7 +494,7 @@ function stepFeatures() {
         var col = s1Collection(bboxGeom(aoi), CFG.REF_START, win.endExcl)
           .filter(ee.Filter.eq('relativeOrbitNumber_start', orbit));
         var samples = featureImage(col, win).sampleRegions({
-          collection: pts, properties: ['unosat_id', 'aoi', 'date', 'label'], scale: 10, geometries: false
+          collection: pts, properties: ['unosat_id', 'aoi', 'date', 'label'], scale: 10, geometries: true
         }).map(function(f) { return f.set({orbit: orbit, window: win.name}); });
         parts.push(samples);
       });
@@ -529,7 +531,7 @@ function stepEval() {
       var prob = predictWindow(bboxGeom(aoi).buffer(500), win, clf);
       if (CFG.EVAL_FOCAL_MAX) prob = prob.focalMax({radius: 15, kernelType: 'square', units: 'meters'});
       parts.push(prob.sampleRegions({
-        collection: pts, properties: ['unosat_id', 'aoi', 'date', 'label'], scale: 10, geometries: false
+        collection: pts, properties: ['unosat_id', 'aoi', 'date', 'label'], scale: 10, geometries: true
       }).map(function(f) { return f.set('window', win.name); }));
     });
   });
@@ -700,7 +702,7 @@ function stepHromada() {
       POST_WINDOWS.forEach(function(w) {
         var n = ee.Number(hist.get(w.name, 0));
         cum = cum.add(n);
-        out.push(ee.Feature(null, {
+        out.push(ee.Feature(NO_GEOM, {
           hromada_pcode: pc, hromada: hName.get(pc, 'NA'), oblast: hOb.get(pc, 'NA'), oblast_pcode: pc.slice(0, 4),
           threshold: th, quarter: w.name, quarter_start: w.start, quarter_end: w.endIncl,
           new_damaged: n, cum_damaged: cum, stock: stock, share_new: n.divide(stock.max(1)),
@@ -736,7 +738,7 @@ function stepPlacebo() {
     var p = {window: w.name, start: w.start, end: w.endIncl, mean_prob: means.get('P_' + w.name),
              n_buildings: withFlags.size()};
     CFG.SENS_THRESHOLDS.forEach(function(th) { p['exceed_' + tag(th)] = means.get('X_' + tag(th) + '_P_' + w.name); });
-    return ee.Feature(null, p);
+    return ee.Feature(NO_GEOM, p);
   }));
   exportTableAsset(rows, scopeDir() + '/placebo_drift');
   exportTable(rows, CFG.SCOPE.toLowerCase() + '_placebo_drift',
