@@ -23,3 +23,18 @@
 With a fixed 2020 reference, quarterly counts after 2022 mostly measure distance from the reference.
 Proposed: rolling reference (the 12 months before each window) so each quarter is compared with its own recent past,
 which matches "newly damaged" directly and keeps the false-positive rate at the T01 level.
+
+## Rolling 12-month reference (re-run, T01–T21)
+
+| @0.655 | pre | T05 | T06 | T07–T21 mean / quarter | UNOSAT recall by T06 | UNOSAT share of T05 detections |
+|---|---|---|---|---|---|---|
+| fixed | 106 | 258 | 135 | 98.1 | 30.4 % | 45.0 % |
+| rolling | 46 | 231 | 41 | 11.5 | 27.0 % | 55.8 % |
+
+- Raw exceedance @0.655 after 2022 falls from 1–2 % (fixed) to 0.02–0.06 % (rolling), the pre-war T01 level: drift removed.
+- The siege peak is kept (231 vs 258 buildings) with slightly lower recall and higher precision.
+- Late detections are no longer clustered with noise across the city (172 T07+ detections vs 1,471).
+- **Remaining artefact: winter quarters.** T20 (Nov 2025–Feb 2026) has 43 detections; mean probability rises for the whole
+  city (0.40 vs ≈0.35; smaller rises in T08 and T12), detections are scattered (median nearest neighbour 563 m) and fall
+  back in T21. Consistent with snow/frozen-ground backscatter changes, not strikes.
+- Building-level recall vs UNOSAT stays low (≈27 % by T06): counts are lower bounds.
