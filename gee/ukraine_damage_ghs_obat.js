@@ -51,10 +51,10 @@ var CFG = {
   LABELS: 'projects/custom-graph-272808/assets/ukr_damage/unosat_labels',
   FOOTPRINTS: 'projects/sat-io/open-datasets/JRC/GHS-OBAT/GHS_OBAT_GPKG_UKR_E2020_R2024A_V1_0',
   HROMADAS: 'projects/custom-graph-272808/assets/ukr_admin_boundaries',   // COD-AB adm3 (hromadas)
-  HROMADA_ID_FIELD: 'ADM3_PCODE',       // COD-AB naming; check with STEP 'CHECK'
-  HROMADA_NAME_FIELD: 'ADM3_EN',
-  OBLAST_ID_FIELD: 'ADM1_PCODE',
-  OBLAST_NAME_FIELD: 'ADM1_EN',
+  HROMADA_ID_FIELD: 'adm3_pcode',       // COD-AB v05 field names (checked with STEP 'CHECK')
+  HROMADA_NAME_FIELD: 'adm3_name',
+  OBLAST_ID_FIELD: 'adm1_pcode',
+  OBLAST_NAME_FIELD: 'adm1_name',
 
   // --- Table exports --------------------------------------------------------
   EXPORT: {type: 'drive', driveFolder: 'ukr_damage', bucket: 'YOUR_BUCKET', prefix: 'ukr_damage/'},
@@ -386,7 +386,9 @@ function buildingTable(fp, stack) {
       .set('n_missing', probs.map(function(p) { return ee.Number(p).lt(0); }).reduce(ee.Reducer.sum()));
     CFG.SENS_THRESHOLDS.forEach(function(th) { props = props.set('fq_' + tag(th), firstDetection(probs, th)); });
     var keep = ee.Feature(ee.Feature(null, {}).copyProperties(f, ['id', 'area', 'use', 'height', 'epoch', 'lon', 'lat', 'adm1']));
-    return ee.Feature(f.geometry().centroid(1), keep.toDictionary().combine(props));
+    var c = f.geometry().centroid(1);
+    var lonlat = ee.List(c.coordinates());   // GHS-OBAT UKR has no lon/lat properties
+    return ee.Feature(c, keep.toDictionary().combine(props).combine({lon: lonlat.get(0), lat: lonlat.get(1)}));
   });
 }
 

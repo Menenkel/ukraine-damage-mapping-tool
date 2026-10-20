@@ -21,9 +21,9 @@ var CFG = {
   ROOT: 'projects/custom-graph-272808/assets/ukr_damage',
   SCOPE: 'country',                     // 'country' | 'pilot'
   HROMADAS: 'projects/custom-graph-272808/assets/ukr_admin_boundaries',
-  HROMADA_ID_FIELD: 'ADM3_PCODE',
-  HROMADA_NAME_FIELD: 'ADM3_EN',
-  OBLAST_NAME_FIELD: 'ADM1_EN',
+  HROMADA_ID_FIELD: 'adm3_pcode',
+  HROMADA_NAME_FIELD: 'adm3_name',
+  OBLAST_NAME_FIELD: 'adm1_name',
   FIRST_WINDOW_START: '2021-02-24',
   END_DATE: '2026-08-23',
   WAR_START: '2022-02-24',
