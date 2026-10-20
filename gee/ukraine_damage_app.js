@@ -59,6 +59,7 @@ var DIR = CFG.ROOT + '/' + CFG.SCOPE;
 var HROMS = ee.FeatureCollection(CFG.HROMADAS);
 var HTABLE = ee.FeatureCollection(DIR + '/hromada_quarter');
 var BLDG = null;   // set asynchronously from the building tables in DIR
+var READY = {hroms: false, htable: false, dir: false};   // set by checkAssets() at start
 
 var state = {q: POST[POST.length - 1].name, th: CFG.DEFAULT_THRESHOLD, cumulative: false,
              showProb: false, showHrom: true, showBldg: true};
@@ -148,9 +149,9 @@ function probLayer() {
 
 function redraw() {
   var layers = [];
-  if (state.showProb) layers.push(probLayer());
-  if (state.showHrom) layers.push(hromadaLayer());
-  layers.push(outlineLayer());
+  if (state.showProb && READY.dir) layers.push(probLayer());
+  if (state.showHrom && READY.hroms && READY.htable) layers.push(hromadaLayer());
+  if (READY.hroms) layers.push(outlineLayer());
   if (state.showBldg && BLDG && map.getZoom() >= CFG.MIN_ZOOM_BUILDINGS) layers.push(buildingLayer());
   map.layers().reset(layers);
   drawLegend();
@@ -169,6 +170,7 @@ function drawLegend() {
 
 // ============================== CHARTS ======================================
 function nationalChart() {
+  if (!READY.htable) return;
   HTABLE.filter(ee.Filter.eq('threshold', state.th))
     .reduceColumns(ee.Reducer.sum().group({groupField: 1, groupName: 'q'}), ['new_damaged', 'quarter'])
     .evaluate(function(res, err) {
@@ -220,6 +222,7 @@ map.onClick(function(c) {
   var pt = ee.Geometry.Point([c.lon, c.lat]);
   status.setValue('Loading…');
   var near = (BLDG && map.getZoom() >= 14) ? BLDG.filterBounds(pt.buffer(25)).first() : null;
+  if (!READY.hroms) { status.setValue('Hromada boundaries not available (see setup message).'); return; }
   var hrom = HROMS.filterBounds(pt).first();
   ee.Dictionary({
     b: near ? ee.Algorithms.If(near, ee.Feature(near).toDictionary(), null) : null,
@@ -235,12 +238,39 @@ map.onClick(function(c) {
 });
 
 // ============================== START =======================================
-ee.data.listAssets(DIR, {}, function(res, err) {
-  var names = ((res && res.assets) || []).map(function(a) { return (a.id || a.name).split('/').pop(); })
-    .filter(function(n) { return n.indexOf('buildings_') === 0; });
-  if (err || !names.length) status.setValue('No building tables found in ' + DIR + ' — showing hromadas only.');
-  else BLDG = ee.FeatureCollection(names.map(function(n) { return ee.FeatureCollection(DIR + '/' + n); })).flatten();
-  redraw();
-});
-redraw();
-nationalChart();
+// Check every input asset asynchronously; show what is missing instead of layer errors.
+function checkAssets() {
+  var missing = [];
+  var setup = ui.Label('', {color: 'b00020', fontSize: '12px', whiteSpace: 'pre-wrap'});
+  panel.widgets().insert(2, setup);
+  function report() {
+    setup.setValue(missing.length ? 'Setup needed:\n- ' + missing.join('\n- ') +
+      '\nEdit CFG at the top of the app script, and run the pipeline steps in ukraine_damage_ghs_obat.js ' +
+      '(BUILDINGS, then HROMADA) for SCOPE "' + CFG.SCOPE + '".' : '');
+    redraw(); nationalChart();
+  }
+  if (CFG.ROOT.indexOf('YOUR_PROJECT') >= 0 || String(CFG.HROMADAS).indexOf('YOUR_PROJECT') >= 0) {
+    missing.push('Replace YOUR_PROJECT in CFG.ROOT / CFG.HROMADAS with your Cloud project ID.');
+    report(); return;
+  }
+  var pending = 3;
+  function done() { if (--pending === 0) report(); }
+  ee.data.getAsset(CFG.HROMADAS, function(a, err) {
+    if (a && !err) READY.hroms = true; else missing.push('Hromada boundaries not found or not readable: ' + CFG.HROMADAS);
+    done();
+  });
+  ee.data.getAsset(DIR + '/hromada_quarter', function(a, err) {
+    if (a && !err) READY.htable = true; else missing.push('Hromada x quarter table missing: ' + DIR + '/hromada_quarter (pipeline STEP HROMADA)');
+    done();
+  });
+  ee.data.listAssets(DIR, {}, function(res, err) {
+    var names = ((res && res.assets) || []).map(function(a) { return (a.id || a.name).split('/').pop(); });
+    READY.dir = !err && names.some(function(n) { return n.indexOf('prob_') === 0; });
+    var b = names.filter(function(n) { return n.indexOf('buildings_') === 0; });
+    if (b.length) BLDG = ee.FeatureCollection(b.map(function(n) { return ee.FeatureCollection(DIR + '/' + n); })).flatten();
+    else missing.push('No building tables in ' + DIR + ' (pipeline STEP BUILDINGS)');
+    done();
+  });
+}
+drawLegend();
+checkAssets();
