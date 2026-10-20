@@ -412,7 +412,7 @@ function joinHromadas(bldg, hroms, keepUnmatched) {
     ee.Filter.intersects({leftField: '.geo', rightField: '.geo', maxError: 1}));
   return joined.map(function(f) {
     var h = f.get('h');
-    var has = ee.Algorithms.IsEqual(h, null).not();
+    var has = ee.Algorithms.If(ee.Algorithms.IsEqual(h, null), false, true);
     var hf = ee.Feature(ee.Algorithms.If(has, h, ee.Feature(null, {})));
     var props = ee.Dictionary(f.toDictionary()).remove(['h']).combine({
       hromada_pcode: ee.Algorithms.If(has, hf.get(CFG.HROMADA_ID_FIELD), 'NA'),
@@ -829,7 +829,7 @@ function stepMap() {
     var b = loadBuildings().filter(ee.Filter.inList('first_q', POST_WINDOWS.map(function(w) { return w.name; })));
     var palette = ['fde725', 'b5de2b', '6ece58', '35b779', '1f9e89', '26828e', '31688e', '3e4989', '482878', '440154'];
     var styled = b.map(function(f) {
-      var i = ee.List(WNAMES).indexOf(f.get('first_q')).subtract(N_PRE);
+      var i = ee.Number(ee.List(WNAMES).indexOf(f.get('first_q'))).subtract(N_PRE);
       var c = ee.List(palette).get(i.multiply(palette.length).divide(POST_WINDOWS.length).floor().min(palette.length - 1).int());
       return f.set('style', {color: c, pointSize: 3, width: 0});
     });
