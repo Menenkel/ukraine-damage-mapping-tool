@@ -105,6 +105,9 @@ var CFG = {
   TOP_HROMADAS: 10
 };
 
+CFG.STEP = String(CFG.STEP).trim().toUpperCase();     // 'features' and 'Features' both work
+CFG.SCOPE = String(CFG.SCOPE).trim().toUpperCase();
+
 // =============================== CONSTANTS ==================================
 var BANDS = ['VV', 'VH'];
 var REDUCER_NAMES = ['mean', 'stdDev', 'median', 'min', 'max', 'skew', 'kurtosis'];
@@ -835,6 +838,6 @@ if (CFG.USE_S1C) log('WARNING: USE_S1C=true mixes S1C into post-2024 windows whi
 var STEPS = {CHECK: stepCheck, FEATURES: stepFeatures, TRAIN: stepTrain, EVAL: stepEval, METRICS: stepMetrics,
              PROB: stepProb, BUILDINGS: stepBuildings, HROMADA: stepHromada, PLACEBO: stepPlacebo,
              TRENDS: stepTrends, MAP: stepMap};
-if (!STEPS[CFG.STEP]) throw new Error('Unknown STEP ' + CFG.STEP);
+if (!STEPS[CFG.STEP]) throw new Error('Unknown STEP ' + CFG.STEP + '. Use one of: ' + Object.keys(STEPS).join(', '));
 log('Start. ' + WINDOWS.length + ' windows ' + WINDOWS[0].start + '..' + WINDOWS[WINDOWS.length - 1].endIncl);
 STEPS[CFG.STEP]();
