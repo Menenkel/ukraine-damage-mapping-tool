@@ -102,3 +102,5 @@ secrets/*
 
 # data folder used to debug
 _data
+# local git bundles (backups)
+*.bundle
