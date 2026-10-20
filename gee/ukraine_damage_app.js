@@ -19,7 +19,7 @@
 // Must match the values used in gee/ukraine_damage_ghs_obat.js.
 var CFG = {
   ROOT: 'projects/custom-graph-272808/assets/ukr_damage',
-  SCOPE: 'pilot_rolling',               // output folder: 'pilot', 'pilot_rolling', 'country', 'country_rolling'
+  SCOPE: 'region_rolling',              // output folder, e.g. 'pilot_rolling', 'region_rolling', 'country_rolling'
   HROMADAS: 'projects/custom-graph-272808/assets/ukr_admin_boundaries',
   HROMADA_ID_FIELD: 'adm3_pcode',
   HROMADA_NAME_FIELD: 'adm3_name',
@@ -266,7 +266,9 @@ function checkAssets() {
   ee.data.listAssets(DIR, {}, function(res, err) {
     var names = ((res && res.assets) || []).map(function(a) { return (a.id || a.name).split('/').pop(); });
     READY.dir = !err && names.some(function(n) { return n.indexOf('prob_') === 0; });
-    var b = names.filter(function(n) { return n.indexOf('buildings_') === 0; });
+    // Prefer background-corrected tables (STEP DETECT), fall back to raw building tables.
+    var b = names.filter(function(n) { return n.indexOf('detect_') === 0; });
+    if (!b.length) b = names.filter(function(n) { return n.indexOf('buildings_') === 0; });
     if (b.length) BLDG = ee.FeatureCollection(b.map(function(n) { return ee.FeatureCollection(DIR + '/' + n); })).flatten();
     else missing.push('No building tables in ' + DIR + ' (pipeline STEP BUILDINGS)');
     done();

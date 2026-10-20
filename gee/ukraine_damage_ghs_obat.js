@@ -44,7 +44,7 @@
 // =============================== CONFIG =====================================
 var CFG = {
   STEP: 'CHECK',
-  SCOPE: 'PILOT',                       // 'PILOT' (Chernihiv, UKR6) | 'COUNTRY'
+  SCOPE: 'REGION',                      // 'PILOT' (Chernihiv, UKR6) | 'REGION' (REGION_HROMADAS) | 'COUNTRY'
 
   // --- Assets (EDIT) --------------------------------------------------------
   ROOT: 'projects/custom-graph-272808/assets/ukr_damage',
@@ -92,7 +92,13 @@ var CFG = {
   SENS_THRESHOLDS: [0.55, 0.655, 0.75],
   MIN_AREA_M2: 50,
   PILOT_AOI: 'UKR6',                    // Chernihiv (test AOI)
-  PILOT_ON_THE_FLY: true,               // pilot: compute probs inside the building export (no rasters)
+  ON_THE_FLY: true,                     // compute probs inside the building export, only around buildings
+                                        // (no full-coverage rasters; saves EECU). false = use STEP PROB rasters.
+  // REGION scope: hromadas to process, as [oblast pcode, hromada name (HROMADA_NAME_FIELD)].
+  // Default: Kharkiv city (strikes throughout 2022-2026) + Uzhhorod (placebo, far west).
+  REGION_HROMADAS: [['UA63', 'Kharkivska'], ['UA21', 'Uzhhorodska']],
+  // Winter / weather correction (STEP DETECT): subtract each window's batch-wide median shift before thresholding.
+  BACKGROUND_CORRECTION: true,
   // GHS-OBAT UKR is published as centroid points. Point footprints are replaced by an equal-area
   // circle (radius = sqrt(area / pi)) so the overlap-weighted mean covers the building's size.
   POINT_FOOTPRINT_TO_AREA_CIRCLE: true,
@@ -382,9 +388,24 @@ function footprints(region) {
   });
 }
 
+// Hromadas selected for SCOPE 'REGION'.
+function regionHromadas() {
+  var h = ee.FeatureCollection(CFG.HROMADAS);
+  return h.filter(ee.Filter.or.apply(null, CFG.REGION_HROMADAS.map(function(r) {
+    return ee.Filter.and(ee.Filter.eq(CFG.OBLAST_ID_FIELD, r[0]), ee.Filter.eq(CFG.HROMADA_NAME_FIELD, r[1]));
+  }).concat([ee.Filter.eq(CFG.OBLAST_ID_FIELD, '__none__')])));
+}
+function scopeRegion() {
+  if (CFG.SCOPE === 'PILOT') return bboxGeom(CFG.PILOT_AOI);
+  if (CFG.SCOPE === 'REGION') return regionHromadas().geometry();
+  return UKRAINE;
+}
+// Building tables used by HROMADA / PLACEBO / MAP: background-corrected ('detect_') or raw ('buildings_').
+function tablePrefix() { return CFG.BACKGROUND_CORRECTION ? 'detect_' : 'buildings_'; }
+
 // Stack of per-window probabilities scaled 0-255, bands P_T01..P_Tn.
 function probStack(region) {
-  if (CFG.SCOPE === 'PILOT' && CFG.PILOT_ON_THE_FLY) {
+  if (CFG.ON_THE_FLY) {
     var clf = loadClassifier();
     return ee.Image.cat(WINDOWS.map(function(w) {
       return predictWindow(region, w, clf).multiply(255).round().rename('P_' + w.name);
@@ -509,6 +530,16 @@ function stepCheck() {
       WNAMES.map(function(n) { return n + ' ' + JSON.stringify(c[n]); }).join('\n'));
   });
   log('Training features exist: ' + assetExists(CFG.ROOT + '/train_features'));
+  if (CFG.SCOPE === 'REGION' && CFG.HROMADAS && assetExists(CFG.HROMADAS)) {
+    regionHromadas().evaluate(function(fc, err) {
+      if (err) { log('ERROR ' + err); return; }
+      log('REGION hromadas matched ' + fc.features.length + ' of ' + CFG.REGION_HROMADAS.length + ':\n' +
+        fc.features.map(function(f) { var p = f.properties;
+          return p[CFG.HROMADA_ID_FIELD] + ' ' + p[CFG.HROMADA_NAME_FIELD] + ' (' + p[CFG.OBLAST_NAME_FIELD] + ', ' +
+            Math.round(p.area_sqkm || 0) + ' km2)'; }).join('\n'));
+    });
+    log('GHS-OBAT > ' + CFG.MIN_AREA_M2 + ' m2 in REGION:', footprints(regionHromadas().geometry()).size());
+  }
 }
 
 function stepFeatures() {
@@ -625,10 +656,10 @@ function stepMetrics() {
 }
 
 function stepProb() {
-  if (CFG.SCOPE === 'PILOT' && CFG.PILOT_ON_THE_FLY) log('Note: PILOT_ON_THE_FLY=true, BUILDINGS will not use these rasters.');
+  if (CFG.ON_THE_FLY) log('Note: ON_THE_FLY=true, BUILDINGS will not use these rasters.');
   var clf = loadClassifier();
   ensureFolder(CFG.ROOT); ensureFolder(scopeDir());
-  var region = CFG.SCOPE === 'PILOT' ? bboxGeom(CFG.PILOT_AOI) : UKRAINE;
+  var region = scopeRegion();
   var wins = WINDOWS.filter(function(w) { return !CFG.WINDOWS_TO_RUN || CFG.WINDOWS_TO_RUN.indexOf(w.name) >= 0; });
 
   function submit(tiles) {   // tiles: [{id, geom}]
@@ -648,7 +679,7 @@ function stepProb() {
     });
   }
 
-  if (CFG.SCOPE === 'PILOT' || !CFG.TILE_DEG) { submit([{id: 'all', geom: region}]); return; }
+  if (CFG.SCOPE !== 'COUNTRY' || !CFG.TILE_DEG) { submit([{id: 'all', geom: region}]); return; }
   var d = CFG.TILE_DEG, cells = [];
   for (var x = 22; x < 40.5; x += d) for (var y = 44; y < 52.5; y += d) {
     cells.push(ee.Feature(ee.Geometry.Rectangle([x, y, x + d, y + d], null, false),
@@ -681,9 +712,25 @@ function stepBuildings() {
     return;
   }
 
-  if (!hasH) throw new Error('COUNTRY BUILDINGS needs CFG.HROMADAS (oblast batching + hromada join).');
+  if (!hasH) throw new Error(CFG.SCOPE + ' BUILDINGS needs CFG.HROMADAS (batching + hromada join).');
   var hroms = ee.FeatureCollection(CFG.HROMADAS);
-  var stack = probStack(UKRAINE);
+
+  if (CFG.SCOPE === 'REGION') {   // one batch per selected hromada
+    regionHromadas().aggregate_array(CFG.HROMADA_ID_FIELD).evaluate(function(ids, err) {
+      if (err) { log('ERROR ' + err); return; }
+      log('Region hromadas matched: ' + ids.length + ' of ' + CFG.REGION_HROMADAS.length + ' (' + ids.join(', ') + ')');
+      ids.forEach(function(id) {
+        var name = 'buildings_' + cleanDesc(String(id));
+        if (existing.indexOf(name) >= 0) { log('SKIP (exists): ' + name); return; }
+        var h = hroms.filter(ee.Filter.eq(CFG.HROMADA_ID_FIELD, id));
+        var geom = h.geometry();
+        var bldg = joinHromadas(buildingTable(footprints(geom), probStack(geom)), h, false);
+        exportTableAsset(bldg, scopeDir() + '/' + name);
+        exportTable(bldg, runTag() + '_' + name, BUILDING_COLS);
+      });
+    });
+    return;
+  }
   hroms.aggregate_array(CFG.OBLAST_ID_FIELD).distinct().sort().evaluate(function(oblasts, err) {
     if (err) { log('ERROR ' + err); return; }
     log('Oblast batches: ' + oblasts.length);
@@ -693,18 +740,56 @@ function stepBuildings() {
       var hOb = hroms.filter(ee.Filter.eq(CFG.OBLAST_ID_FIELD, ob));
       var fp = footprints(hOb.geometry());
       // centroid join drops buildings whose centroid lies in another oblast (no double counting)
-      var bldg = joinHromadas(buildingTable(fp, stack), hOb, false);
+      var bldg = joinHromadas(buildingTable(fp, probStack(hOb.geometry())), hOb, false);
       exportTableAsset(bldg, scopeDir() + '/' + name);
       exportTable(bldg, runTag() + '_' + name, BUILDING_COLS);
     });
   });
 }
 
-function loadBuildings() {
-  var names = childNames(scopeDir()).filter(function(n) { return n.indexOf('buildings_') === 0; });
-  if (!names.length) throw new Error('No building tables in ' + scopeDir() + ' (run STEP BUILDINGS).');
+function loadBuildings(prefix) {
+  prefix = prefix || tablePrefix();
+  var names = childNames(scopeDir()).filter(function(n) { return n.indexOf(prefix) === 0; });
+  if (!names.length) throw new Error('No ' + prefix + '* tables in ' + scopeDir() +
+    ' (run STEP ' + (prefix === 'detect_' ? 'DETECT' : 'BUILDINGS') + ').');
   log('Building tables: ' + names.join(', '));
   return ee.FeatureCollection(names.map(function(n) { return ee.FeatureCollection(scopeDir() + '/' + n); })).flatten();
+}
+
+// Background (winter/weather) correction per building table: each window's median building probability is
+// shifted to the median over all windows, then first detection is recomputed. Raw probabilities are kept as PR_*.
+function stepDetect() {
+  var names = childNames(scopeDir()).filter(function(n) { return n.indexOf('buildings_') === 0; });
+  if (!names.length) throw new Error('No building tables in ' + scopeDir() + ' (run STEP BUILDINGS).');
+  var existing = childNames(scopeDir());
+  names.forEach(function(n) {
+    var out = n.replace('buildings_', 'detect_');
+    if (existing.indexOf(out) >= 0) { log('SKIP (exists): ' + out); return; }
+    var fc = ee.FeatureCollection(scopeDir() + '/' + n);
+    var med = ee.Dictionary(fc.filter(ee.Filter.eq('n_missing', 0))
+      .reduceColumns(ee.Reducer.median().forEach(PNAMES), PNAMES));
+    var meds = ee.List(PNAMES.map(function(p) { return med.get(p); }));
+    var centre = ee.Number(meds.reduce(ee.Reducer.median()));
+    var shifts = meds.map(function(m) { return ee.Number(m).subtract(centre); });
+    var adj = fc.map(function(f) {
+      var raw = ee.List(PNAMES.map(function(p) { return f.get(p); }));
+      var probs = ee.List.sequence(0, PNAMES.length - 1).map(function(i) {
+        var v = ee.Number(raw.get(i));
+        return ee.Algorithms.If(v.lt(0), v, v.subtract(ee.Number(shifts.get(i))));
+      });
+      var rounded = probs.map(function(p) { return ee.Number(p).multiply(1000).round().divide(1000); });
+      var props = ee.Dictionary.fromLists(PNAMES, rounded)
+        .combine(ee.Dictionary.fromLists(PNAMES.map(function(p) { return 'PR_' + p.slice(2); }), raw))
+        .set('first_q', firstDetection(probs, CFG.THRESHOLD));
+      CFG.SENS_THRESHOLDS.forEach(function(th) { props = props.set('fq_' + tag(th), firstDetection(probs, th)); });
+      return f.set(props);
+    });
+    var shiftRow = ee.FeatureCollection([ee.Feature(NO_GEOM, ee.Dictionary.fromLists(PNAMES, shifts).set('table', n))]);
+    log('Background shift per window for ' + n + ' (subtracted):', ee.Dictionary.fromLists(WNAMES, shifts));
+    exportTableAsset(adj, scopeDir() + '/' + out);
+    exportTable(adj, runTag() + '_' + out, BUILDING_COLS.concat(PNAMES.map(function(p) { return 'PR_' + p.slice(2); })));
+    exportTable(shiftRow, runTag() + '_' + out + '_shifts', ['table'].concat(PNAMES));
+  });
 }
 
 function stepHromada() {
@@ -830,11 +915,11 @@ function stepTrends() {
 }
 
 function stepMap() {
-  var region = CFG.SCOPE === 'PILOT' ? bboxGeom(CFG.PILOT_AOI) : UKRAINE;
-  Map.centerObject(region, CFG.SCOPE === 'PILOT' ? 12 : 6);
+  var region = scopeRegion();
+  Map.centerObject(region, CFG.SCOPE === 'COUNTRY' ? 6 : 11);
   var vis = {min: 0, max: 255, palette: ['000004', '51127c', 'b73779', 'fc8961', 'fcfdbf']};
   var showWins = [WINDOWS[N_PRE - 1], WINDOWS[N_PRE], WINDOWS[N_PRE + 1], WINDOWS[WINDOWS.length - 1]];
-  if (CFG.SCOPE === 'PILOT' && CFG.PILOT_ON_THE_FLY) {
+  if (CFG.ON_THE_FLY) {
     var clf = loadClassifier();
     showWins.forEach(function(w) {
       Map.addLayer(predictWindow(region, w, clf).multiply(255).clip(region), vis, 'prob ' + w.name + ' ' + w.start, false);
@@ -844,7 +929,7 @@ function stepMap() {
       Map.addLayer(ee.ImageCollection(scopeDir() + '/prob_' + w.name).mosaic(), vis, 'prob ' + w.name + ' ' + w.start, false);
     });
   }
-  var names = childNames(scopeDir()).filter(function(n) { return n.indexOf('buildings_') === 0; });
+  var names = childNames(scopeDir()).filter(function(n) { return n.indexOf(tablePrefix()) === 0; });
   if (names.length) {
     var b = loadBuildings().filter(ee.Filter.inList('first_q', POST_WINDOWS.map(function(w) { return w.name; })));
     var palette = ['fde725', 'b5de2b', '6ece58', '35b779', '1f9e89', '26828e', '31688e', '3e4989', '482878', '440154'];
@@ -854,7 +939,14 @@ function stepMap() {
       return f.set('style', {color: c, pointSize: 3, width: 0});
     });
     Map.addLayer(styled.style({styleProperty: 'style'}), {}, 'first detection (yellow=early, purple=late) @' + CFG.THRESHOLD);
-    if (CFG.SCOPE === 'PILOT') log('Pilot first-detection counts @' + CFG.THRESHOLD + ':', loadBuildings().aggregate_histogram('first_q'));
+    if (CFG.SCOPE !== 'COUNTRY') {
+      loadBuildings().aggregate_histogram('first_q').evaluate(function(h, err) {
+        if (err) { log('ERROR ' + err); return; }
+        log('First-detection counts @' + CFG.THRESHOLD + ' (' + tablePrefix() + 'tables):\n' +
+          ['pre'].concat(POST_WINDOWS.map(function(w) { return w.name; })).concat(['none']).map(function(k) {
+            return k + ': ' + (h[k] || 0); }).join('\n'));
+      });
+    }
   }
   if (CFG.HROMADAS && assetExists(CFG.HROMADAS)) {
     Map.addLayer(ee.Image().paint(ee.FeatureCollection(CFG.HROMADAS).filterBounds(region), 0, 1), {palette: ['ffffff']}, 'hromadas');
@@ -865,7 +957,7 @@ function stepMap() {
 if (CFG.USE_S1C) log('WARNING: USE_S1C=true mixes S1C into post-2024 windows while T0 is S1A-only. Validate before use.');
 var STEPS = {CHECK: stepCheck, FEATURES: stepFeatures, TRAIN: stepTrain, EVAL: stepEval, METRICS: stepMetrics,
              PROB: stepProb, BUILDINGS: stepBuildings, HROMADA: stepHromada, PLACEBO: stepPlacebo,
-             TRENDS: stepTrends, MAP: stepMap};
+             TRENDS: stepTrends, MAP: stepMap, DETECT: stepDetect};
 if (!STEPS[CFG.STEP]) throw new Error('Unknown STEP ' + CFG.STEP + '. Use one of: ' + Object.keys(STEPS).join(', '));
 log('Start. ' + WINDOWS.length + ' windows ' + WINDOWS[0].start + '..' + WINDOWS[WINDOWS.length - 1].endIncl);
 STEPS[CFG.STEP]();
