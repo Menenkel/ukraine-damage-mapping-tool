@@ -512,7 +512,9 @@ function stepTrain() {
   var clf = ee.Classifier.smileRandomForest({
     numberOfTrees: CFG.RF.numberOfTrees, minLeafPopulation: CFG.RF.minLeafPopulation,
     maxNodes: CFG.RF.maxNodes, seed: CFG.RF.seed
-  }).setOutputMode('PROBABILITY').train({features: fc, classProperty: 'label', inputProperties: FEATURE_NAMES});
+  }).train({features: fc, classProperty: 'label', inputProperties: FEATURE_NAMES});
+  // Exported in default CLASSIFICATION mode (GEE cannot export RF in PROBABILITY mode);
+  // loadClassifier() switches the loaded model to PROBABILITY output.
   log('Classifier explain (importance):', clf.explain());
   var assetId = CFG.ROOT + '/rf_classifier';
   if (shouldSubmit('rf_classifier', assetExists(assetId))) {
