@@ -19,13 +19,13 @@
 // Must match the values used in gee/ukraine_damage_ghs_obat.js.
 var CFG = {
   ROOT: 'projects/custom-graph-272808/assets/ukr_damage',
-  SCOPE: 'country',                     // 'country' | 'pilot'
+  SCOPE: 'pilot_rolling',               // output folder: 'pilot', 'pilot_rolling', 'country', 'country_rolling'
   HROMADAS: 'projects/custom-graph-272808/assets/ukr_admin_boundaries',
   HROMADA_ID_FIELD: 'adm3_pcode',
   HROMADA_NAME_FIELD: 'adm3_name',
   OBLAST_NAME_FIELD: 'adm1_name',
   FIRST_WINDOW_START: '2021-02-24',
-  END_DATE: '2026-08-23',
+  END_DATE: '2026-05-23',
   WAR_START: '2022-02-24',
   THRESHOLDS: [0.55, 0.655, 0.75],
   DEFAULT_THRESHOLD: 0.655,

@@ -63,7 +63,13 @@ var CFG = {
   REF_START: '2020-02-24',              // T0, inclusive
   REF_END: '2021-02-24',                // T0, exclusive (= 2021-02-23 inclusive)
   FIRST_WINDOW_START: '2021-02-24',     // T1 start; windows are consecutive 3 months
-  END_DATE: '2026-08-23',               // last inclusive day; only complete windows are used
+  END_DATE: '2026-05-23',               // last inclusive day (T21); T22 has no Sentinel-1A data
+  // Reference period for inference (BUILDINGS / PROB / MAP):
+  //   'fixed'   = T0 for every window (paper; counts drift upward with time since 2020)
+  //   'rolling' = the 12 months before each window, so each quarter is compared with its own recent past
+  // Training (FEATURES/TRAIN) and evaluation (EVAL) always use the fixed reference, as in the paper.
+  REFERENCE_MODE: 'rolling',
+  ROLLING_MONTHS: 12,
   WAR_START: '2022-02-24',
 
   // --- Sensor ---------------------------------------------------------------
@@ -181,7 +187,15 @@ function labelRule(windowEndIncl, unosatDate) {
 // Table assets cannot hold null geometries; summary rows get a dummy point (not exported to CSV).
 var NO_GEOM = ee.Geometry.Point([0, 0]);
 function tag(th) { return 't' + String(th).replace('.', ''); }       // 0.655 -> t0655
-function scopeDir() { return CFG.ROOT + '/' + CFG.SCOPE.toLowerCase(); }
+// Output folder / file prefix per scope and reference mode, e.g. 'pilot' (fixed) or 'pilot_rolling'.
+function runTag() { return CFG.SCOPE.toLowerCase() + (CFG.REFERENCE_MODE === 'rolling' ? '_rolling' : ''); }
+function scopeDir() { return CFG.ROOT + '/' + runTag(); }
+
+// Reference period [start, end) for a window: fixed T0, or the ROLLING_MONTHS before the window.
+function refRange(win, mode) {
+  if (mode === 'rolling') return {start: addMonths(win.start, -CFG.ROLLING_MONTHS), end: win.start};
+  return {start: CFG.REF_START, end: CFG.REF_END};
+}
 function bboxGeom(aoi) { var b = AOI_BBOX[aoi]; return ee.Geometry.Rectangle(b, null, false); }
 function cleanDesc(s) { return s.replace(/[^A-Za-z0-9_,:;-]/g, '_').slice(0, 100); }
 
@@ -282,15 +296,17 @@ function prefixed(period) {
 var FEATURE_NAMES = prefixed('ref').concat(prefixed('new'));   // 28 features
 
 // 28-band feature image for one orbit's collection and one window.
-function featureImage(col, win) {
-  var ref = col.filterDate(CFG.REF_START, CFG.REF_END).reduce(REDUCER).select(ORIG_NAMES, prefixed('ref'));
+function featureImage(col, win, mode) {
+  var r = refRange(win, mode);
+  var ref = col.filterDate(r.start, r.end).reduce(REDUCER).select(ORIG_NAMES, prefixed('ref'));
   var neu = col.filterDate(win.start, win.endExcl).reduce(REDUCER).select(ORIG_NAMES, prefixed('new'));
   return ref.addBands(neu);
 }
 
 // Orbits with >= MIN_IMAGES_PER_ORBIT images in both T0 and the window (repo: find_orbits).
-function validOrbits(s1, win) {
-  var ref = ee.Dictionary(s1.filterDate(CFG.REF_START, CFG.REF_END).aggregate_histogram('relativeOrbitNumber_start'));
+function validOrbits(s1, win, mode) {
+  var r = refRange(win, mode);
+  var ref = ee.Dictionary(s1.filterDate(r.start, r.end).aggregate_histogram('relativeOrbitNumber_start'));
   var neu = ee.Dictionary(s1.filterDate(win.start, win.endExcl).aggregate_histogram('relativeOrbitNumber_start'));
   return ref.keys().map(function(k) {
     var ok = ee.Number(ref.get(k)).gte(CFG.MIN_IMAGES_PER_ORBIT)
@@ -300,12 +316,14 @@ function validOrbits(s1, win) {
 }
 
 // Probability (0-1) for one window: each relative orbit separately, then per-pixel mean.
-function predictWindow(region, win, clf) {
-  var s1 = s1Collection(region, CFG.REF_START, win.endExcl);
-  var orbits = validOrbits(s1, win);
+// mode defaults to CFG.REFERENCE_MODE; EVAL passes 'fixed'.
+function predictWindow(region, win, clf, mode) {
+  mode = mode || CFG.REFERENCE_MODE;
+  var s1 = s1Collection(region, refRange(win, mode).start, win.endExcl);
+  var orbits = validOrbits(s1, win, mode);
   var preds = ee.ImageCollection.fromImages(orbits.map(function(o) {
     var col = s1.filter(ee.Filter.eq('relativeOrbitNumber_start', o));
-    return featureImage(col, win).classify(clf, 'prob').toFloat();
+    return featureImage(col, win, mode).classify(clf, 'prob').toFloat();
   }));
   return ee.Image(ee.Algorithms.If(orbits.size().gt(0), preds.mean(),
     ee.Image.constant(0).toFloat().updateMask(0))).rename('prob');
@@ -433,6 +451,8 @@ function stepCheck() {
   log('Windows (' + WINDOWS.length + ', ' + N_PRE + ' pre-invasion):',
       WINDOWS.map(function(w) { return w.name + ' ' + w.start + '..' + w.endIncl + (w.pre ? ' (pre)' : ''); }));
   log('Last complete window ends ' + WINDOWS[WINDOWS.length - 1].endIncl + ' (END_DATE ' + CFG.END_DATE + ')');
+  log('Reference mode: ' + CFG.REFERENCE_MODE + ' (e.g. ' + WINDOWS[4].name + ' compared with ' +
+      refRange(WINDOWS[4], CFG.REFERENCE_MODE).start + '..' + refRange(WINDOWS[4], CFG.REFERENCE_MODE).end + ', end exclusive); outputs in ' + scopeDir());
 
   if (assetExists(CFG.LABELS)) {
     var labels = loadLabels();
@@ -501,7 +521,7 @@ function stepFeatures() {
         var pts = labelledPoints(labels, aoi, win, 'spec');
         var col = s1Collection(bboxGeom(aoi), CFG.REF_START, win.endExcl)
           .filter(ee.Filter.eq('relativeOrbitNumber_start', orbit));
-        var samples = featureImage(col, win).sampleRegions({
+        var samples = featureImage(col, win, 'fixed').sampleRegions({
           collection: pts, properties: ['unosat_id', 'aoi', 'date', 'label'], scale: 10, geometries: true
         }).map(function(f) { return f.set({orbit: orbit, window: win.name}); });
         parts.push(samples);
@@ -534,7 +554,7 @@ function stepEval() {
     WINDOWS.slice(0, CFG.EVAL_N_WINDOWS).forEach(function(win) {
       if (!win.pre && CFG.EVAL_ONLY_2022_POS && win.start.slice(0, 4) !== '2022') return;
       var pts = labelledPoints(labels, aoi, win, CFG.EVAL_POSITIVE_RULE);
-      var prob = predictWindow(bboxGeom(aoi).buffer(500), win, clf);
+      var prob = predictWindow(bboxGeom(aoi).buffer(500), win, clf, 'fixed');
       if (CFG.EVAL_FOCAL_MAX) prob = prob.focalMax({radius: 15, kernelType: 'square', units: 'meters'});
       parts.push(prob.sampleRegions({
         collection: pts, properties: ['unosat_id', 'aoi', 'date', 'label'], scale: 10, geometries: true
@@ -656,7 +676,7 @@ function stepBuildings() {
     var name = 'buildings_pilot_' + CFG.PILOT_AOI;
     if (existing.indexOf(name) < 0) {
       exportTableAsset(bldg, scopeDir() + '/' + name);
-      exportTable(bldg, name, BUILDING_COLS);
+      exportTable(bldg, runTag() + '_' + name, BUILDING_COLS);
     } else { log('SKIP (exists): ' + name); }
     return;
   }
@@ -675,7 +695,7 @@ function stepBuildings() {
       // centroid join drops buildings whose centroid lies in another oblast (no double counting)
       var bldg = joinHromadas(buildingTable(fp, stack), hOb, false);
       exportTableAsset(bldg, scopeDir() + '/' + name);
-      exportTable(bldg, CFG.SCOPE.toLowerCase() + '_' + name, BUILDING_COLS);
+      exportTable(bldg, runTag() + '_' + name, BUILDING_COLS);
     });
   });
 }
@@ -722,7 +742,7 @@ function stepHromada() {
   var table = ee.FeatureCollection(rows);
   var name = 'hromada_quarter';
   exportTableAsset(table, scopeDir() + '/' + name);
-  exportTable(table, CFG.SCOPE.toLowerCase() + '_' + name,
+  exportTable(table, runTag() + '_' + name,
     ['hromada_pcode', 'hromada', 'oblast', 'oblast_pcode', 'threshold', 'quarter', 'quarter_start', 'quarter_end',
      'new_damaged', 'cum_damaged', 'stock', 'share_new', 'share_cum', 'pre_flagged']);
 }
@@ -747,7 +767,7 @@ function stepPlacebo() {
     return ee.Feature(NO_GEOM, p);
   }));
   exportTableAsset(rows, scopeDir() + '/placebo_drift');
-  exportTable(rows, CFG.SCOPE.toLowerCase() + '_placebo_drift',
+  exportTable(rows, runTag() + '_placebo_drift',
     ['window', 'start', 'end', 'n_buildings', 'mean_prob'].concat(THRESH_TAGS.map(function(t) { return 'exceed_' + t; })));
 }
 
