@@ -50,7 +50,7 @@ var CFG = {
   ROOT: 'projects/custom-graph-272808/assets/ukr_damage',
   LABELS: 'projects/custom-graph-272808/assets/ukr_damage/unosat_labels',
   FOOTPRINTS: 'projects/sat-io/open-datasets/JRC/GHS-OBAT/GHS_OBAT_GPKG_UKR_E2020_R2024A_V1_0',
-  HROMADAS: 'projects/custom-graph-272808/assets/ukr_admin3',   // COD-AB adm3 (hromadas)
+  HROMADAS: 'projects/custom-graph-272808/assets/ukr_admin_boundaries',   // COD-AB adm3 (hromadas)
   HROMADA_ID_FIELD: 'ADM3_PCODE',       // COD-AB naming; check with STEP 'CHECK'
   HROMADA_NAME_FIELD: 'ADM3_EN',
   OBLAST_ID_FIELD: 'ADM1_PCODE',

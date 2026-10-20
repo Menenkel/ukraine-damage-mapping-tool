@@ -20,7 +20,7 @@
 var CFG = {
   ROOT: 'projects/custom-graph-272808/assets/ukr_damage',
   SCOPE: 'country',                     // 'country' | 'pilot'
-  HROMADAS: 'projects/custom-graph-272808/assets/ukr_admin3',
+  HROMADAS: 'projects/custom-graph-272808/assets/ukr_admin_boundaries',
   HROMADA_ID_FIELD: 'ADM3_PCODE',
   HROMADA_NAME_FIELD: 'ADM3_EN',
   OBLAST_NAME_FIELD: 'ADM1_EN',
