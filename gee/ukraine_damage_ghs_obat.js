@@ -99,8 +99,9 @@ var CFG = {
   TILE_SCALE: 4,                        // reduceRegions tileScale
 
   // --- Placebo / trends -----------------------------------------------------
-  PLACEBO_OBLASTS: ['Zakarpatska', 'Chernivetska', 'Ivano-Frankivska', 'Ternopilska',
-                    'Volynska', 'Rivnenska', 'Lvivska'],   // values of OBLAST_NAME_FIELD
+  // Western oblasts far from the front (COD-AB adm1_pcode): Volynska, Zakarpatska, Ivano-Frankivska,
+  // Lvivska, Rivnenska, Ternopilska, Chernivetska. Expect ~0 detections.
+  PLACEBO_OBLAST_PCODES: ['UA07', 'UA21', 'UA26', 'UA46', 'UA56', 'UA61', 'UA73'],
   TOP_HROMADAS: 10
 };
 
@@ -454,7 +455,13 @@ function stepCheck() {
         if (!(k in f.properties)) log('FIELD NOT FOUND in hromada asset: ' + k + ' -> fix the *_FIELD settings in CFG');
       });
     });
-    log('Oblasts (' + CFG.OBLAST_NAME_FIELD + '):', h.aggregate_array(CFG.OBLAST_NAME_FIELD).distinct().sort());
+    ee.Dictionary.fromLists(h.aggregate_array(CFG.OBLAST_ID_FIELD), h.aggregate_array(CFG.OBLAST_NAME_FIELD))
+      .evaluate(function(d, err) {
+        if (err) { log('ERROR ' + err); return; }
+        log('Oblasts (' + CFG.OBLAST_ID_FIELD + ' = ' + CFG.OBLAST_NAME_FIELD + '):\n' + Object.keys(d).sort().map(function(k) {
+          return k + ' = ' + d[k] + (CFG.PLACEBO_OBLAST_PCODES.indexOf(k) >= 0 ? '   [placebo]' : '');
+        }).join('\n'));
+      });
   } else { log('Hromada asset not set or missing: ' + CFG.HROMADAS); }
 
   // S1 availability per window over Ukraine (per platform), to spot gaps in recent quarters.
@@ -691,7 +698,7 @@ function stepHromada() {
         var n = ee.Number(hist.get(w.name, 0));
         cum = cum.add(n);
         out.push(ee.Feature(null, {
-          hromada_pcode: pc, hromada: hName.get(pc, 'NA'), oblast: hOb.get(pc, 'NA'),
+          hromada_pcode: pc, hromada: hName.get(pc, 'NA'), oblast: hOb.get(pc, 'NA'), oblast_pcode: pc.slice(0, 4),
           threshold: th, quarter: w.name, quarter_start: w.start, quarter_end: w.endIncl,
           new_damaged: n, cum_damaged: cum, stock: stock, share_new: n.divide(stock.max(1)),
           share_cum: cum.divide(stock.max(1)), pre_flagged: ee.Number(hist.get('pre', 0))
@@ -705,12 +712,12 @@ function stepHromada() {
   var name = 'hromada_quarter';
   exportTableAsset(table, scopeDir() + '/' + name);
   exportTable(table, CFG.SCOPE.toLowerCase() + '_' + name,
-    ['hromada_pcode', 'hromada', 'oblast', 'threshold', 'quarter', 'quarter_start', 'quarter_end',
+    ['hromada_pcode', 'hromada', 'oblast', 'oblast_pcode', 'threshold', 'quarter', 'quarter_start', 'quarter_end',
      'new_damaged', 'cum_damaged', 'stock', 'share_new', 'share_cum', 'pre_flagged']);
 }
 
 function stepPlacebo() {
-  var bldg = loadBuildings().filter(ee.Filter.inList('oblast', CFG.PLACEBO_OBLASTS));
+  var bldg = loadBuildings().filter(ee.Filter.inList('oblast_pcode', CFG.PLACEBO_OBLAST_PCODES));
   // Drift: per-window mean probability and raw exceedance rate (not first-detection) in western oblasts.
   var withFlags = bldg.filter(ee.Filter.eq('n_missing', 0)).map(function(f) {
     var d = {};
@@ -777,7 +784,7 @@ function stepTrends() {
     });
 
   // Placebo: detections in western oblasts (expected ~0).
-  var placebo = t.filter(ee.Filter.inList('oblast', CFG.PLACEBO_OBLASTS));
+  var placebo = t.filter(ee.Filter.inList('oblast_pcode', CFG.PLACEBO_OBLAST_PCODES));
   chartGrouped(placebo.map(function(f) { return f.set('thr', ee.Number(f.get('threshold')).format('%.3f')); }),
     'new_damaged', 'PLACEBO western oblasts: newly flagged buildings per quarter', 'thr');
   log('Placebo building stock:', placebo.filter(ee.Filter.and(ee.Filter.eq('threshold', CFG.THRESHOLD),
