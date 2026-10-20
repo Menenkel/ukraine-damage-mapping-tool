@@ -18,9 +18,9 @@
 // =============================== CONFIG =====================================
 // Must match the values used in gee/ukraine_damage_ghs_obat.js.
 var CFG = {
-  ROOT: 'projects/YOUR_PROJECT/assets/ukr_damage',
+  ROOT: 'projects/custom-graph-272808/assets/ukr_damage',
   SCOPE: 'country',                     // 'country' | 'pilot'
-  HROMADAS: 'projects/YOUR_PROJECT/assets/ukr_admbnda_adm3',
+  HROMADAS: 'projects/custom-graph-272808/assets/ukr_admin3',
   HROMADA_ID_FIELD: 'ADM3_PCODE',
   HROMADA_NAME_FIELD: 'ADM3_EN',
   OBLAST_NAME_FIELD: 'ADM1_EN',
