@@ -509,7 +509,8 @@ function stepCheck() {
         if (!(k in f.properties)) log('FIELD NOT FOUND in hromada asset: ' + k + ' -> fix the *_FIELD settings in CFG');
       });
     });
-    ee.Dictionary.fromLists(h.aggregate_array(CFG.OBLAST_ID_FIELD), h.aggregate_array(CFG.OBLAST_NAME_FIELD))
+    var hOne = h.distinct(CFG.OBLAST_ID_FIELD);   // one hromada per oblast -> unique keys
+    ee.Dictionary.fromLists(hOne.aggregate_array(CFG.OBLAST_ID_FIELD), hOne.aggregate_array(CFG.OBLAST_NAME_FIELD))
       .evaluate(function(d, err) {
         if (err) { log('ERROR ' + err); return; }
         log('Oblasts (' + CFG.OBLAST_ID_FIELD + ' = ' + CFG.OBLAST_NAME_FIELD + '):\n' + Object.keys(d).sort().map(function(k) {
